@@ -13,7 +13,7 @@ pi install git:github.com/eoinest/pi-workout
 pi
 ```
 
-Inside Pi, run `/workout setup` once to install the isolated native camera environment and download the verified pose model. This requires Python 3.10–3.12; setup defaults to `python3.12`. To use a specific interpreter, run `/workout setup /absolute/path/to/python3.12`. Setup never accesses the camera. Select your provider/model with Pi's usual commands.
+Just start using Pi. Your first positive-count submission automatically prepares the local camera runtime, then opens the preview. You can also run `/workout setup` inside Pi to prepare it ahead of time. No system Python installation, interpreter path, or external script command is required. The plugin downloads a pinned, checksum-verified uv binary, provisions a private Python 3.12 environment, installs the camera dependencies, and verifies the pose model. Escape cancels setup without sending your prompt. Setup never accesses the camera. Select your provider/model with Pi's usual commands. Initial setup needs network access; subsequent use is local.
 
 For a local checkout or one-session trial:
 
@@ -54,7 +54,8 @@ native/camera.py              shared camera, MediaPipe, skeleton overlay
 native/exercises/__init__.py   native exercise registry
 native/exercises/common.py     shared stable full-cycle state machine
 native/exercises/{curls,pullups,pushups,squats,situps}.py  per-exercise geometry
-native/setup.py               isolated dependencies and verified model download
+src/setup.ts                  automatic private Python, dependencies, and verified model
+native/healthcheck.py          validates the runtime without opening the camera
 test/                         Pi gate and subprocess tests
 native/test_counter.py        synthetic pose tests
 ```
@@ -77,7 +78,7 @@ Position the camera side-on in good lighting. Each rep needs a stable starting p
 
 Curls count one visible arm's complete cycle. Pull-ups estimate elbow motion with hands overhead; monocular pose landmarks cannot prove that you're hanging from a bar or clear the bar with your chin. Sit-ups require bent knees and similar hip/foot height to distinguish them from standing bends. These are approximate movement counters, not verified exercise-form scoring.
 
-For push-ups, Counting requires a roughly horizontal torso, straight hips and knees, hands below shoulders, and a stable straight-arm → lowered → straight-arm cycle. Tracking lost for over 700ms resets the cycle. Knee push-ups are not currently supported. Camera placement, visibility, and body proportions affect recognition; this counts approximate reps rather than assessing exercise form. Cancelled attempts discard partial reps. Text is restored exactly; attached images must be reattached after cancellation.
+For push-ups, counting requires a roughly horizontal torso, straight hips and knees, hands below shoulders, and a stable straight-arm → lowered → straight-arm cycle. Tracking lost for over 700ms resets the cycle. Knee push-ups are not currently supported. Camera placement, visibility, and body proportions affect recognition; this counts approximate reps rather than assessing exercise form. Cancelled attempts discard partial reps. Text is restored exactly; attached images must be reattached after cancellation.
 
 Slash commands remain normal Pi commands. Positive-count noninteractive user prompts are blocked, since they cannot show the native gate. Zero-count mode passes through. Programmatic messages from other extensions pass through. This is a personal workflow gate, not an anti-cheating boundary.
 
@@ -93,7 +94,7 @@ python3 -m unittest discover -s native -p 'test_*.py'
 npm pack --dry-run
 ```
 
-Tests exercise zero-count bypass, completion, exact draft restoration, worker failures/cancellation, settings validation, and rep geometry without using a camera or paid model calls. Live camera accuracy still needs validation with your physical setup. Native setup uses pinned MediaPipe/OpenCV PyPI wheels and a versioned model checked against its SHA-256 hash.
+Tests exercise zero-count bypass, completion, exact draft restoration, worker failures/cancellation, settings validation, and rep geometry without using a camera or paid model calls. Live camera accuracy still needs validation with your physical setup. Native setup uses uv 0.13.0 from the official Astral release (pinned SHA-256 per platform), managed Python 3.12, pinned MediaPipe/OpenCV PyPI wheels, and a versioned model checked against its SHA-256 hash. Python, uv, its cache, and the environment all stay in the plugin data directory; setup does not install into or alter system Python.
 
 ## License
 

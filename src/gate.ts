@@ -1,22 +1,24 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext, InputEventResult } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { exercises } from "./exercises.ts";
-import { getRuntimeDirectory } from "./runtime.ts";
 import { defaults, validateSettings, type WorkoutSettings } from "./settings.ts";
+import type { SetupOptions } from "./setup.ts";
 import type { GateJob, GateResult, startWorker } from "./worker.ts";
 
 export interface GateDependencies {
 	settingsPath: string;
 	start: typeof startWorker;
+	prepare?: (options?: SetupOptions) => Promise<void>;
 }
 export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependencies): void {
 	let settings = { ...defaults };
 	let configurationError: string | undefined;
 	let active: GateJob | undefined;
+	let gateOpen = false;
+	let cancelPreparation: (() => void) | undefined;
 	try {
 		if (existsSync(dependencies.settingsPath))
 			settings = validateSettings(JSON.parse(readFileSync(dependencies.settingsPath, "utf8")));
@@ -32,13 +34,16 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 				ctx.ui.notify(`Workout settings invalid: ${configurationError}. Use /workout reset.`, "error");
 		}
 	});
-	pi.on("session_shutdown", () => active?.cancel());
+	pi.on("session_shutdown", () => {
+		cancelPreparation?.();
+		active?.cancel();
+	});
 	pi.registerCommand("workout", {
 		description:
 			"Configure workout: /workout [setup | exercise NAME | reps N | camera N | confidence N | upAngle N | downAngle N | holdMs N | reset]",
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "tui") return;
-			if (active) {
+			if (gateOpen) {
 				ctx.ui.notify("Close the camera gate before changing settings.", "warning");
 				return;
 			}
@@ -58,21 +63,63 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 						input = `${choice} ${value}`;
 					}
 				}
-				if (input === "setup" || input.startsWith("setup ")) {
-					const python = input === "setup" ? "python3.12" : input.slice(6).trim();
-					ctx.ui.notify("Installing native camera dependencies and verified pose model…", "info");
-					const setup = await pi.exec(
-						python,
-						[fileURLToPath(new URL("../native/setup.py", import.meta.url)), "--data-dir", getRuntimeDirectory()],
-						{ timeout: 180000 },
-					);
-					if (setup.code !== 0)
-						throw new Error(
-							`Native setup failed. ${setup.stderr.slice(-1500)} Use /workout setup /absolute/path/to/python3.12.`,
-						);
-					ctx.ui.notify("Native camera setup complete. Your next prompt will open the workout gate.", "info");
+				if (input === "setup") {
+					if (!dependencies.prepare) throw new Error("Runtime setup is unavailable.");
+					gateOpen = true;
+					try {
+						await ctx.ui
+							.custom<GateResult>((tui, theme, keybindings, done) => {
+								let message = "Preparing local camera runtime…",
+									disposed = false;
+								const controller = new AbortController();
+								cancelPreparation = () => controller.abort();
+								void dependencies
+									.prepare?.({
+										signal: controller.signal,
+										onProgress: (value) => {
+											message = value;
+											tui.requestRender();
+										},
+									})
+									.then(() => {
+										if (!disposed) done({ status: "complete" });
+									})
+									.catch((error) => {
+										if (!disposed)
+											done({
+												status: controller.signal.aborted ? "cancelled" : "error",
+												message: error instanceof Error ? error.message : String(error),
+											});
+									});
+								return {
+									render: (width: number) => [
+										truncateToWidth(theme.fg("accent", message), width),
+										truncateToWidth(`${keybindings.getKeys("app.interrupt").join("/")} cancels setup.`, width),
+									],
+									handleInput: (data: string) => {
+										if (keybindings.matches(data, "app.interrupt") || keybindings.matches(data, "app.clear"))
+											controller.abort();
+									},
+									invalidate: () => {},
+									dispose: () => {
+										disposed = true;
+										controller.abort();
+									},
+								};
+							})
+							.then((result) => {
+								if (result.status === "error") throw new Error(result.message);
+								if (result.status === "complete")
+									ctx.ui.notify("Camera setup complete. Ready for your next prompt.", "info");
+							});
+					} finally {
+						gateOpen = false;
+						cancelPreparation = undefined;
+						cancelPreparation = undefined;
+					}
 					return;
 				}
+				if (input.startsWith("setup ")) throw new Error("Use /workout setup. Python is managed automatically.");
 				let next: WorkoutSettings;
 				if (input === "reset") next = { ...defaults };
 				else {
@@ -114,23 +161,52 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 			ctx.ui.notify("Workout gate requires Pi TUI. Configure zero reps in the TUI to disable it.", "error");
 			return { action: "handled" };
 		}
-		if (active) {
+		if (gateOpen) {
 			ctx.ui.notify("A camera gate is already active.", "warning");
 			return { action: "handled" };
 		}
 		let outcome: GateResult = { status: "cancelled" };
+		gateOpen = true;
 		try {
 			outcome = await ctx.ui.custom<GateResult>((tui, theme, keybindings, done) => {
 				let count = 0,
 					disposed = false;
-				active = dependencies.start({ ...settings }, (value) => {
-					count = value;
-					tui.requestRender();
-				});
-				const job = active;
-				void job.result.then((result) => {
+				let message = "Preparing camera…";
+				const controller = new AbortController();
+				cancelPreparation = () => controller.abort();
+				const finish = (result: GateResult) => {
 					if (!disposed) done(result);
-				});
+				};
+				const prepare =
+					dependencies.prepare && !process.env.PI_WORKOUT_PYTHON
+						? dependencies.prepare({
+								signal: controller.signal,
+								onProgress: (value) => {
+									message = value;
+									tui.requestRender();
+								},
+							})
+						: Promise.resolve();
+				void prepare
+					.then(() => {
+						if (disposed || controller.signal.aborted) {
+							finish({ status: "cancelled" });
+							return;
+						}
+						active = dependencies.start({ ...settings }, (value) => {
+							count = value;
+							tui.requestRender();
+						});
+						message = exercises[settings.exercise].instructions;
+						tui.requestRender();
+						return active.result.then(finish);
+					})
+					.catch((error) =>
+						finish({
+							status: controller.signal.aborted ? "cancelled" : "error",
+							message: error instanceof Error ? error.message : String(error),
+						}),
+					);
 				return {
 					render: (width: number) => [
 						truncateToWidth(
@@ -140,19 +216,23 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 							),
 							width,
 						),
-						truncateToWidth(exercises[settings.exercise].instructions, width),
+						truncateToWidth(message, width),
 						truncateToWidth(
 							`${keybindings.getKeys("app.interrupt").join("/")} cancels and restores your draft.`,
 							width,
 						),
 					],
 					handleInput: (data: string) => {
-						if (keybindings.matches(data, "app.interrupt") || keybindings.matches(data, "app.clear")) job.cancel();
+						if (keybindings.matches(data, "app.interrupt") || keybindings.matches(data, "app.clear")) {
+							controller.abort();
+							active?.cancel();
+						}
 					},
 					invalidate: () => {},
 					dispose: () => {
 						disposed = true;
-						job.cancel();
+						controller.abort();
+						active?.cancel();
 					},
 				};
 			});
@@ -160,6 +240,8 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 			outcome = { status: "error", message: error instanceof Error ? error.message : String(error) };
 		} finally {
 			active = undefined;
+			gateOpen = false;
+			cancelPreparation = undefined;
 			status(ctx);
 		}
 		if (outcome.status === "complete") return { action: "continue" };

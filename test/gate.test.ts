@@ -13,13 +13,20 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installWorkoutGate } from "../src/gate.ts";
 import { defaults, validateSettings } from "../src/settings.ts";
+import type { SetupOptions } from "../src/setup.ts";
 import { type GateResult, startWorker } from "../src/worker.ts";
 
 const directories: string[] = [];
 afterEach(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
-async function harness(outcome: GateResult, reps = 1, exercise = "pushups") {
+async function harness(
+	outcome: GateResult,
+	reps = 1,
+	exercise = "pushups",
+	prepare?: (options?: SetupOptions) => Promise<void>,
+	cancelDuringSetup = false,
+) {
 	const directory = await mkdtemp(join(tmpdir(), "workout-test-"));
 	directories.push(directory);
 	const path = join(directory, "settings.json");
@@ -36,7 +43,7 @@ async function harness(outcome: GateResult, reps = 1, exercise = "pushups") {
 		result: Promise.resolve(outcome),
 		cancel,
 	}));
-	installWorkoutGate(api, { settingsPath: path, start });
+	installWorkoutGate(api, { settingsPath: path, start, prepare });
 	const ui = {
 		notify: vi.fn(),
 		setStatus: vi.fn(),
@@ -57,10 +64,14 @@ async function harness(outcome: GateResult, reps = 1, exercise = "pushups") {
 				const component = factory(
 					{ requestRender: vi.fn() } as unknown as TUI,
 					{ fg: (_color: string, text: string) => text } as unknown as Theme,
-					{ getKeys: () => ["escape"], matches: () => false } as unknown as KeybindingsManager,
+					{
+						getKeys: () => ["escape"],
+						matches: (data: string, action: string) => data === "\x1b" && action === "app.interrupt",
+					} as unknown as KeybindingsManager,
 					finish,
 				);
-				expect(component.render(80).join(" ")).toContain("your prompt is held");
+				expect(component.render(80).length).toBeGreaterThan(0);
+				if (cancelDuringSetup) component.handleInput?.("\x1b");
 				const value = await result;
 				component.dispose?.();
 				return value;
@@ -200,5 +211,67 @@ describe("exercise selection", () => {
 		await registration.handler("exercise unknown", h.ctx);
 		expect(JSON.parse(await readFile(h.path, "utf8")).exercise).toBe("pushups");
 		expect(h.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Unknown exercise"), "error");
+	});
+});
+
+describe("automatic local setup", () => {
+	it("prepares before opening the camera on the first gated prompt", async () => {
+		const order: string[] = [];
+		const prepare = vi.fn(async () => {
+			order.push("setup");
+		});
+		const h = await harness({ status: "complete" }, 1, "pushups", prepare);
+		h.start.mockImplementation(() => {
+			order.push("camera");
+			return { result: Promise.resolve({ status: "complete" }), cancel: vi.fn() };
+		});
+		expect(await h.input({ type: "input", text: "draft", source: "interactive" }, h.ctx)).toEqual({
+			action: "continue",
+		});
+		expect(order).toEqual(["setup", "camera"]);
+	});
+	it("zero reps does not download or prepare a runtime", async () => {
+		const prepare = vi.fn(async () => {});
+		const h = await harness({ status: "complete" }, 0, "pushups", prepare);
+		await h.input({ type: "input", text: "draft", source: "interactive" }, h.ctx);
+		expect(prepare).not.toHaveBeenCalled();
+	});
+	it("reports setup errors and restores the draft without starting a camera", async () => {
+		const prepare = vi.fn(async () => {
+			throw new Error("Runtime download failed: HTTP 503.");
+		});
+		const h = await harness({ status: "complete" }, 1, "pushups", prepare);
+		expect(await h.input({ type: "input", text: "unchanged draft", source: "interactive" }, h.ctx)).toEqual({
+			action: "handled",
+		});
+		expect(h.start).not.toHaveBeenCalled();
+		expect(h.ui.setEditorText).toHaveBeenCalledWith("unchanged draft");
+		expect(h.ui.notify).toHaveBeenCalledWith(expect.stringContaining("HTTP 503"), "error");
+	});
+	it("Escape cancels preparation and restores the draft", async () => {
+		const prepare = vi.fn(
+			(options?: SetupOptions) =>
+				new Promise<void>((_resolve, reject) => {
+					options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+				}),
+		);
+		const h = await harness({ status: "complete" }, 1, "pushups", prepare, true);
+		expect(await h.input({ type: "input", text: "cancelled draft", source: "interactive" }, h.ctx)).toEqual({
+			action: "handled",
+		});
+		expect(h.start).not.toHaveBeenCalled();
+		expect(h.ui.setEditorText).toHaveBeenCalledWith("cancelled draft");
+	});
+	it("the bare setup command uses built-in preparation with no interpreter argument", async () => {
+		const prepare = vi.fn(async () => {});
+		const h = await harness({ status: "complete" }, 1, "pushups", prepare);
+		const command = h.api.registerCommand as unknown as ReturnType<typeof vi.fn>;
+		const registration = command.mock.calls[0][1] as {
+			handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+		};
+		await registration.handler("setup", h.ctx);
+		expect(prepare).toHaveBeenCalledOnce();
+		expect(h.start).not.toHaveBeenCalled();
+		expect(h.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Camera setup complete"), "info");
 	});
 });
