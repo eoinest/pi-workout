@@ -1,6 +1,6 @@
 {
 	"name": "@eoinest/pi-workout",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "sharpen your mind and your body",
 	"type": "module",
 	"license": "MIT",
@@ -22,7 +22,8 @@
 		"native/requirements.txt",
 		"native/exercises/*.py",
 		"README.md",
-		"LICENSE"
+		"LICENSE",
+		"native/capture.py"
 	],
 	"pi": {
 		"extensions": [

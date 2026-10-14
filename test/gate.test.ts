@@ -275,3 +275,23 @@ describe("automatic local setup", () => {
 		expect(h.ui.notify).toHaveBeenCalledWith(expect.stringContaining("Camera setup complete"), "info");
 	});
 });
+
+it("forwards camera startup status while preserving progress and completion", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "workout-camera-status-"));
+	directories.push(directory);
+	const binary = join(directory, "helper");
+	await writeFile(
+		binary,
+		`#!${process.execPath}\nprocess.stdout.write('${JSON.stringify({ type: "status", message: "Camera ready: MacBook Pro Camera" })}\\n${JSON.stringify({ type: "progress", count: 1 })}\\n${JSON.stringify({ type: "complete" })}\\n');\n`,
+	);
+	await chmod(binary, 0o755);
+	vi.stubEnv("PI_WORKOUT_PYTHON", binary);
+	try {
+		const status = vi.fn();
+		const worker = startWorker({ ...defaults }, () => {}, status);
+		expect(await worker.result).toEqual({ status: "complete" });
+		expect(status).toHaveBeenCalledWith("Camera ready: MacBook Pro Camera");
+	} finally {
+		vi.unstubAllEnvs();
+	}
+});

@@ -34,7 +34,8 @@ All workout settings are available in the TUI:
 - `/workout exercise pushups` selects push-ups; also accepts `curls`, `pullups`, `squats`, and `situps`. Switching exercises loads its default angle thresholds.
 - `/workout reps 3` or `/workout 3` requires three repetitions.
 - `/workout 0` disables the gate.
-- `/workout camera 1` selects a camera index (default 0).
+- `/workout cameras` lists the named camera choices on macOS.
+- `/workout camera 1` selects a camera index. On macOS, camera 0 prefers the built-in MacBook camera; USB cameras follow, then iPhone Continuity cameras. These logical indices are mapped to OpenCV's device-ID order automatically.
 - `/workout confidence 0.65` sets minimum landmark confidence.
 - `/workout upAngle 155`, `/workout downAngle 100`, and `/workout holdMs 180` adjust the selected counter's thresholds. `upAngle` is the extended starting position; `downAngle` is the contracted position.
 - `/workout reset` restores defaults: one push-up per prompt.
@@ -51,6 +52,7 @@ src/runtime.ts                persistent runtime paths
 src/worker.ts                 native helper process and cancellation protocol
 src/exercises.ts              exercise catalog and setup instructions
 native/camera.py              shared camera, MediaPipe, skeleton overlay
+native/capture.py             camera selection, permission, warm-up, and recovery
 native/exercises/__init__.py   native exercise registry
 native/exercises/common.py     shared stable full-cycle state machine
 native/exercises/{curls,pullups,pushups,squats,situps}.py  per-exercise geometry
@@ -64,7 +66,7 @@ To add another workout, add its definition in `src/exercises.ts`, implement a co
 
 ## Tracking and privacy
 
-MediaPipe Pose Landmarker runs locally through Python, and OpenCV displays the native preview. No browser, web server, or replacement chat UI is involved. Frames and pose data are neither recorded nor sent to Pi's provider. Camera access starts only after a positive-count submission. Closing the preview, cancelling, errors, timeout, or session shutdown releases it. On macOS the camera permission may be attributed to Terminal or Python because Pi launches the helper.
+MediaPipe Pose Landmarker runs locally through Python, and OpenCV displays the native preview. No browser, web server, or replacement chat UI is involved. Frames and pose data are neither recorded nor sent to Pi's provider. Camera access starts only after a positive-count submission. Closing the preview, cancelling, errors, timeout, or session shutdown releases it. Camera selection prefers the built-in device on macOS, waits for the permission response, keeps the camera's supported native format, and allows up to 12 seconds for its first usable frame. A short frame drop gets a three-second grace period and one reconnect attempt. Native frames are resized in software for tracking; capture resolution is never forced. The TUI reports the selected camera and startup/reconnect status. On macOS the camera permission may be attributed to Terminal or Python because Pi launches the helper.
 
 Position the camera side-on in good lighting. Each rep needs a stable starting pose, a contracted pose, and a return to the start:
 
@@ -94,7 +96,7 @@ python3 -m unittest discover -s native -p 'test_*.py'
 npm pack --dry-run
 ```
 
-Tests exercise zero-count bypass, completion, exact draft restoration, worker failures/cancellation, settings validation, and rep geometry without using a camera or paid model calls. Live camera accuracy still needs validation with your physical setup. Native setup uses uv 0.13.0 from the official Astral release (pinned SHA-256 per platform), managed Python 3.12, pinned MediaPipe/OpenCV PyPI wheels, and a versioned model checked against its SHA-256 hash. Python, uv, its cache, and the environment all stay in the plugin data directory; setup does not install into or alter system Python.
+Tests exercise zero-count bypass, completion, exact draft restoration, worker failures/cancellation, settings validation, and rep geometry without using a camera or paid model calls. Live camera accuracy still needs validation with your physical setup. Native setup uses uv 0.13.0 from the official Astral release (pinned SHA-256 per platform), managed Python 3.12, pinned MediaPipe/OpenCV and macOS-only PyObjC AVFoundation PyPI wheels, and a versioned model checked against its SHA-256 hash. Python, uv, its cache, and the environment all stay in the plugin data directory; setup does not install into or alter system Python.
 
 ## License
 

@@ -12,6 +12,7 @@ export interface GateDependencies {
 	settingsPath: string;
 	start: typeof startWorker;
 	prepare?: (options?: SetupOptions) => Promise<void>;
+	listCameras?: () => Promise<string>;
 }
 export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependencies): void {
 	let settings = { ...defaults };
@@ -40,7 +41,7 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 	});
 	pi.registerCommand("workout", {
 		description:
-			"Configure workout: /workout [setup | exercise NAME | reps N | camera N | confidence N | upAngle N | downAngle N | holdMs N | reset]",
+			"Configure workout: /workout [setup | cameras | exercise NAME | reps N | camera N | confidence N | upAngle N | downAngle N | holdMs N | reset]",
 		handler: async (args, ctx) => {
 			if (ctx.mode !== "tui") return;
 			if (gateOpen) {
@@ -50,9 +51,14 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 			try {
 				let input = args.trim();
 				if (!input) {
-					const choice = await ctx.ui.select("Workout gate settings", [...Object.keys(defaults), "setup", "reset"]);
+					const choice = await ctx.ui.select("Workout gate settings", [
+						...Object.keys(defaults),
+						"cameras",
+						"setup",
+						"reset",
+					]);
 					if (!choice) return;
-					if (choice === "reset" || choice === "setup") input = choice;
+					if (choice === "reset" || choice === "setup" || choice === "cameras") input = choice;
 					else if (choice === "exercise") {
 						const selected = await ctx.ui.select("Choose exercise", Object.keys(exercises));
 						if (!selected) return;
@@ -62,6 +68,18 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 						if (value === undefined) return;
 						input = `${choice} ${value}`;
 					}
+				}
+				if (input === "cameras") {
+					if (!dependencies.listCameras) throw new Error("Camera listing is unavailable.");
+					gateOpen = true;
+					try {
+						await dependencies.prepare?.({ onProgress: (message) => ctx.ui.setStatus("workout", message) });
+						ctx.ui.notify(await dependencies.listCameras(), "info");
+					} finally {
+						gateOpen = false;
+						status(ctx);
+					}
+					return;
 				}
 				if (input === "setup") {
 					if (!dependencies.prepare) throw new Error("Runtime setup is unavailable.");
@@ -193,10 +211,17 @@ export function installWorkoutGate(pi: ExtensionAPI, dependencies: GateDependenc
 							finish({ status: "cancelled" });
 							return;
 						}
-						active = dependencies.start({ ...settings }, (value) => {
-							count = value;
-							tui.requestRender();
-						});
+						active = dependencies.start(
+							{ ...settings },
+							(value) => {
+								count = value;
+								tui.requestRender();
+							},
+							(value) => {
+								message = value;
+								tui.requestRender();
+							},
+						);
 						message = exercises[settings.exercise].instructions;
 						tui.requestRender();
 						return active.result.then(finish);

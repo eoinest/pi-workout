@@ -9,7 +9,11 @@ export interface GateJob {
 	result: Promise<GateResult>;
 	cancel: () => void;
 }
-export function startWorker(settings: WorkoutSettings, onProgress: (count: number) => void): GateJob {
+export function startWorker(
+	settings: WorkoutSettings,
+	onProgress: (count: number) => void,
+	onStatus?: (message: string) => void,
+): GateJob {
 	const script = fileURLToPath(new URL("../native/camera.py", import.meta.url));
 	const dataDirectory = getRuntimeDirectory();
 	const python =
@@ -78,6 +82,7 @@ export function startWorker(settings: WorkoutSettings, onProgress: (count: numbe
 					count = event.count;
 					onProgress(count);
 				}
+				if (event.type === "status" && typeof event.message === "string") onStatus?.(event.message.slice(0, 500));
 				if (event.type === "complete" && count === settings.reps) terminal = { status: "complete" };
 				if (event.type === "cancelled") terminal = { status: "cancelled" };
 				if (event.type === "error") terminal = { status: "error", message: event.message || "Camera failed." };
