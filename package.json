@@ -1,0 +1,52 @@
+{
+	"name": "@eoinest/pi-workout",
+	"version": "0.1.0",
+	"description": "sharpen your mind and your body",
+	"type": "module",
+	"license": "MIT",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"workout",
+		"computer-vision"
+	],
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/eoinest/pi-workout.git"
+	},
+	"files": [
+		"extensions",
+		"src",
+		"native/camera.py",
+		"native/setup.py",
+		"native/requirements.txt",
+		"native/exercises/*.py",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./extensions/index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "1.2.0",
+		"@earendil-works/pi-tui": "1.2.0",
+		"@types/node": "22.19.19",
+		"typescript": "7.0.2",
+		"vitest": "4.1.11",
+		"@biomejs/biome": "2.3.5"
+	},
+	"scripts": {
+		"check": "biome check extensions src test package.json tsconfig.json && tsc --noEmit",
+		"test": "vitest run",
+		"test:native": "python3 -m unittest discover -s native -p \"test_*.py\""
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	}
+}

@@ -1,0 +1,7 @@
+node_modules/
+.local/
+coverage/
+__pycache__/
+*.task
+.venv/
+*.tgz
